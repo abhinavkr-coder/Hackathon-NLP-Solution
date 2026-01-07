@@ -1,0 +1,23 @@
+# Core Pathway framework (required for Track A)
+pathway>=0.8.0
+
+# NLP and embedding models
+sentence-transformers>=2.2.2
+transformers>=4.30.0
+
+# Text processing
+nltk>=3.8.1
+
+# Data handling
+pandas>=2.0.0
+numpy>=1.24.0
+
+# LLM integration (optional but recommended for better accuracy)
+anthropic>=0.25.0
+
+# Utilities
+tqdm>=4.65.0
+
+# Optional: For enhanced retrieval
+# faiss-cpu>=1.7.4  # For faster similarity search on CPU
+# faiss-gpu>=1.7.4  # For GPU acceleration (if available)
