@@ -14,8 +14,10 @@ a hypothesis.
 """
 
 import logging
-from typing import List, Dict, Tuple
+import os
 import re
+import time
+from typing import List, Dict, Tuple
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -47,11 +49,11 @@ class ConsistencyJudge:
         self.api_key = api_key
         
         if use_llm and not api_key:
-            import os
-            self.api_key = os.getenv('ANTHROPIC_API_KEY')
+            # Changed from ANTHROPIC_API_KEY to GROQ_API_KEY
+            self.api_key = os.getenv('GROQ_API_KEY')
             if not self.api_key:
                 logger.warning(
-                    "No API key provided and ANTHROPIC_API_KEY not in environment. "
+                    "No API key provided and GROQ_API_KEY not in environment. "
                     "Falling back to rule-based judgment."
                 )
                 self.use_llm = False
@@ -74,6 +76,31 @@ class ConsistencyJudge:
             return self._judge_with_llm(backstory, evidence, novel_id)
         else:
             return self._judge_with_heuristics(backstory, evidence, novel_id)
+
+    def _check_antonyms(self, backstory: str, evidence_text: str) -> bool:
+        """
+        Check for semantic contradictions using common antonym pairs.
+        Returns True if a contradiction is found.
+        """
+        # Common antonym pairs relevant to backstories
+        pairs = [
+            ('wealthy', 'poverty'), ('rich', 'poor'), ('wealth', 'poor'),
+            ('aristocrat', 'peasant'), ('noble', 'commoner'),
+            ('loved', 'hated'), ('always', 'never'),
+            ('brave', 'cowardly'), ('strong', 'weak'),
+            ('dead', 'alive'), ('died', 'survived')
+        ]
+        
+        b_lower = backstory.lower()
+        e_lower = evidence_text.lower()
+        
+        for w1, w2 in pairs:
+            # Check if one word is in backstory and the OPPOSITE is in evidence
+            if (w1 in b_lower and w2 in e_lower) or \
+               (w2 in b_lower and w1 in e_lower):
+                logger.info(f"Heuristic contradiction found: {w1} vs {w2}")
+                return True
+        return False
     
     def _judge_with_heuristics(
         self,
@@ -82,53 +109,56 @@ class ConsistencyJudge:
         novel_id: str
     ) -> Tuple[int, str, float]:
         """
-        Rule-based consistency checking.
-        
-        This is a fallback method that uses linguistic cues and similarity
-        patterns to make a judgment. It's not as sophisticated as LLM-based
-        reasoning, but it's fast and interpretable.
+        Rule-based consistency checking with improved contradiction detection.
         
         Key heuristics:
-        1. Strong negation in high-similarity passages suggests contradiction
-        2. Low overall similarity suggests backstory is unsupported
-        3. Inconsistent temporal patterns suggest problems
-        4. Causal language that conflicts with backstory suggests inconsistency
+        1. Semantic antonyms (wealthy vs poverty)
+        2. Strong negation in high-similarity passages
+        3. Low overall similarity suggests backstory is unsupported
         """
         if not evidence:
             return 0, "No evidence found to support backstory", 0.5
         
         # Calculate average similarity
         avg_similarity = sum(chunk['similarity'] for chunk in evidence) / len(evidence)
+        combined_evidence_text = " ".join([chunk['text'] for chunk in evidence])
         
-        # Check for negation words in high-similarity chunks
+        # 1. Check for semantic antonyms (wealthy vs poverty)
+        if self._check_antonyms(backstory, combined_evidence_text):
+             return 0, "Backstory contradicts evidence (antonyms found)", 0.8
+
+        # 2. Check for negation words in high-similarity chunks
         negation_words = ['not', 'never', 'no', 'none', 'nobody', 'nothing', 'impossible', 'cannot']
         contradiction_count = 0
         
         for chunk in evidence[:5]:  # Focus on top 5 most similar
             if chunk['similarity'] > 0.7:
                 text_lower = chunk['text'].lower()
-                if any(word in text_lower for word in negation_words):
+                # Only count negation if the chunk actually shares significant words with backstory
+                common_words = set(backstory.lower().split()) & set(text_lower.split())
+                if len(common_words) > 2 and any(word in text_lower for word in negation_words):
                     contradiction_count += 1
         
         # Decision logic
-        if avg_similarity < 0.4:
+        if avg_similarity < 0.45:
             # Very low similarity - backstory might be unrelated to novel
-            return 0, "Backstory claims are not well-supported by the narrative", 0.6
+            return 0, "Backstory claims are not supported by the narrative", 0.6
         
-        elif contradiction_count >= 2:
-            # Multiple high-similarity passages with negation
-            return 0, "Evidence contains contradictions to backstory claims", 0.7
+        elif contradiction_count >= 1:
+            # High-similarity passages with negation
+            return 0, "Evidence contains direct negations of backstory claims", 0.7
         
-        elif avg_similarity > 0.6 and contradiction_count == 0:
+        elif avg_similarity > 0.65 and contradiction_count == 0:
             # High similarity, no clear contradictions
-            return 1, "Backstory is well-supported by narrative evidence", 0.7
+            return 1, "Backstory is well-supported by narrative evidence", 0.8
         
         else:
-            # Ambiguous case - lean toward consistent if evidence is moderately relevant
-            if avg_similarity > 0.5:
-                return 1, "Backstory is plausible given available evidence", 0.5
+            # Ambiguous case - Default to UNCERTAIN/INCONSISTENT if not strongly supported
+            # (Changed from returning 1 to 0 to avoid false positives)
+            if avg_similarity > 0.6:
+                return 1, "Backstory is plausible given available evidence", 0.55
             else:
-                return 0, "Insufficient evidence to support backstory", 0.5
+                return 0, "Insufficient evidence to confirm backstory", 0.5
     
     def _judge_with_llm(
         self,
@@ -137,16 +167,9 @@ class ConsistencyJudge:
         novel_id: str
     ) -> Tuple[int, str, float]:
         """
-        LLM-based consistency checking with structured reasoning.
+        LLM-based consistency checking using Llama 3 (via Groq).
         
-        This is where we leverage Claude's reasoning capabilities to make
-        sophisticated judgments about narrative consistency.
-        
-        The prompt is carefully designed to:
-        1. Focus on causal consistency, not surface contradictions
-        2. Consider evidence holistically, not in isolation
-        3. Distinguish between "not mentioned" and "contradicted"
-        4. Provide clear reasoning that can be audited
+        This replaces the previous Anthropic implementation with Groq for faster/free inference.
         """
         try:
             # Prepare evidence context
@@ -155,26 +178,30 @@ class ConsistencyJudge:
             # Create the judgment prompt
             prompt = self._create_judgment_prompt(backstory, evidence_text)
             
-            # Call Claude API
-            import anthropic
-            client = anthropic.Anthropic(api_key=self.api_key)
+            # Call Groq API (requires pip install groq)
+            from groq import Groq
+            client = Groq(api_key=self.api_key)
             
-            response = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=1000,
-                temperature=0,  # We want consistent, deterministic judgments
+            response = client.chat.completions.create(
                 messages=[
                     {"role": "user", "content": prompt}
-                ]
+                ],
+                model="llama3-70b-8192",  # Using Llama 3 70B on Groq
+                temperature=0,  # We want consistent, deterministic judgments
+                max_tokens=1000,
             )
             
             # Parse the response
-            response_text = response.content[0].text
+            response_text = response.choices[0].message.content
             prediction, rationale, confidence = self._parse_llm_response(response_text)
             
             logger.info(f"LLM judgment for {novel_id}: {prediction} (confidence: {confidence:.2f})")
             return prediction, rationale, confidence
             
+        except ImportError:
+            logger.error("Groq library not installed. Please run: pip install groq")
+            logger.info("Falling back to heuristic judgment")
+            return self._judge_with_heuristics(backstory, evidence, novel_id)
         except Exception as e:
             logger.error(f"Error in LLM judgment: {e}")
             logger.info("Falling back to heuristic judgment")
@@ -183,9 +210,6 @@ class ConsistencyJudge:
     def _format_evidence_for_llm(self, evidence: List[Dict], max_chunks: int = 10) -> str:
         """
         Format evidence chunks for LLM consumption.
-        
-        We need to present evidence clearly but concisely to stay within
-        context limits. We prioritize the most relevant chunks.
         """
         formatted_pieces = []
         
@@ -199,13 +223,10 @@ class ConsistencyJudge:
     
     def _create_judgment_prompt(self, backstory: str, evidence_text: str) -> str:
         """
-        Create a carefully structured prompt for LLM judgment.
-        
-        This prompt is designed to elicit reasoning about causal consistency
-        and narrative constraints, not just surface-level matching.
+        Create prompt for Llama 3 judgment.
         """
-        prompt = f"""You are analyzing narrative consistency in a novel. Your task is to determine whether a proposed character backstory is causally and logically consistent with events in the novel.
-
+        prompt = f"""You are analyzing narrative consistency in a novel.
+        
 BACKSTORY TO EVALUATE:
 {backstory}
 
@@ -216,26 +237,14 @@ TASK:
 Determine if this backstory is CONSISTENT (1) or INCONSISTENT (0) with the novel based on the evidence.
 
 IMPORTANT GUIDELINES:
-1. Focus on CAUSAL CONSISTENCY: Would the events in the evidence still make sense if this backstory were true? Or would it create logical impossibilities or contradictions?
-
-2. Distinguish between:
-   - NOT MENTIONED (neutral, could be consistent)
-   - CONTRADICTED (actively inconsistent)
-
-3. Consider narrative constraints: Even if nothing explicitly contradicts the backstory, does it fit the character's development, motivations, and the world's established rules?
-
-4. Look for:
-   - Direct contradictions in facts or timeline
-   - Incompatible character traits or motivations
-   - Events that wouldn't make sense given the backstory
-   - Missed opportunities where the backstory should have mattered but didn't
-
-5. Base your judgment on multiple pieces of evidence, not a single passage.
+1. Focus on CAUSAL CONSISTENCY.
+2. If the evidence directly contradicts the backstory (e.g. backstory says "rich", novel says "poverty"), mark as 0.
+3. If the backstory is plausible and not contradicted, mark as 1.
 
 REQUIRED OUTPUT FORMAT:
 JUDGMENT: [0 or 1]
 CONFIDENCE: [0.0-1.0]
-REASONING: [2-3 sentence explanation of your decision, citing specific evidence]
+REASONING: [2-3 sentence explanation of your decision]
 
 Provide your analysis now:"""
         
@@ -244,16 +253,13 @@ Provide your analysis now:"""
     def _parse_llm_response(self, response_text: str) -> Tuple[int, str, float]:
         """
         Parse structured output from LLM.
-        
-        We expect the LLM to follow our format, but we add robust parsing
-        to handle slight variations.
         """
         # Extract judgment
         judgment_match = re.search(r'JUDGMENT:\s*(\d)', response_text)
         if judgment_match:
             prediction = int(judgment_match.group(1))
         else:
-            # Fallback: look for "consistent" or "inconsistent" in text
+            # Fallback: look for keywords
             if 'inconsistent' in response_text.lower():
                 prediction = 0
             else:
@@ -282,9 +288,6 @@ Provide your analysis now:"""
     ) -> List[Dict]:
         """
         Process multiple backstory-evidence pairs efficiently.
-        
-        This is useful for the test set where we have multiple examples to judge.
-        We add progress tracking to give feedback during long runs.
         """
         results = []
         total = len(backstory_evidence_pairs)
@@ -307,7 +310,6 @@ Provide your analysis now:"""
             
             # Add a small delay if using LLM to respect rate limits
             if self.use_llm and i < total:
-                import time
                 time.sleep(0.5)
         
         logger.info("Batch judgment complete")
@@ -318,22 +320,28 @@ if __name__ == "__main__":
     # Test the judge with mock evidence
     judge = ConsistencyJudge(use_llm=False)
     
-    test_backstory = "John grew up in poverty in London"
-    test_evidence = [
+    # TEST CASE 1: Contradiction (Wealth vs Poverty)
+    print("\nTest Case 1: Contradiction")
+    test_backstory_1 = "John was born wealthy and inherited a private hospital."
+    test_evidence_1 = [
+        {
+            'text': "John remembered the cold winters in his childhood home, where heating was a luxury they couldn't afford due to their extreme poverty.",
+            'similarity': 0.85
+        }
+    ]
+    pred1, rat1, conf1 = judge.judge_consistency(test_backstory_1, test_evidence_1, "test1")
+    print(f"Prediction: {pred1} (Expected: 0)")
+    print(f"Rationale: {rat1}")
+
+    # TEST CASE 2: Consistent
+    print("\nTest Case 2: Consistent")
+    test_backstory_2 = "John grew up in poverty in London."
+    test_evidence_2 = [
         {
             'text': "John remembered the cold winters in his childhood home in London, where heating was a luxury they couldn't afford.",
             'similarity': 0.85
-        },
-        {
-            'text': "Despite his humble beginnings, John had always been driven to succeed.",
-            'similarity': 0.72
         }
     ]
-    
-    prediction, rationale, confidence = judge.judge_consistency(
-        test_backstory, test_evidence, "test"
-    )
-    
-    print(f"Prediction: {prediction}")
-    print(f"Confidence: {confidence:.2f}")
-    print(f"Rationale: {rationale}")
+    pred2, rat2, conf2 = judge.judge_consistency(test_backstory_2, test_evidence_2, "test2")
+    print(f"Prediction: {pred2} (Expected: 1)")
+    print(f"Rationale: {rat2}")

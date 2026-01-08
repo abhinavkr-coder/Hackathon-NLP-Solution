@@ -1,3 +1,3 @@
 story_id,prediction,rationale
-1,1,Backstory is plausible given available evidence
-2,1,Backstory is plausible given available evidence
+1,0,Insufficient evidence to confirm backstory
+2,0,Backstory contradicts evidence (antonyms found)
