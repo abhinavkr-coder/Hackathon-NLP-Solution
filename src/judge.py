@@ -167,18 +167,14 @@ class ConsistencyJudge:
         novel_id: str
     ) -> Tuple[int, str, float]:
         """
-        LLM-based consistency checking using Llama 3 (via Groq).
-        
-        This replaces the previous Anthropic implementation with Groq for faster/free inference.
+        LLM-based consistency checking using a supported Llama model (via Groq).
         """
         try:
             # Prepare evidence context
             evidence_text = self._format_evidence_for_llm(evidence)
-            
-            # Create the judgment prompt
             prompt = self._create_judgment_prompt(backstory, evidence_text)
             
-            # Call Groq API (requires pip install groq)
+            # Import Groq client
             from groq import Groq
             client = Groq(api_key=self.api_key)
             
@@ -186,8 +182,9 @@ class ConsistencyJudge:
                 messages=[
                     {"role": "user", "content": prompt}
                 ],
-                model="llama3-70b-8192",  # Using Llama 3 70B on Groq
-                temperature=0,  # We want consistent, deterministic judgments
+                # UPDATED: Use a supported model like llama-3.3-70b-versatile
+                model="llama-3.3-70b-versatile", 
+                temperature=0,
                 max_tokens=1000,
             )
             
@@ -198,14 +195,10 @@ class ConsistencyJudge:
             logger.info(f"LLM judgment for {novel_id}: {prediction} (confidence: {confidence:.2f})")
             return prediction, rationale, confidence
             
-        except ImportError:
-            logger.error("Groq library not installed. Please run: pip install groq")
-            logger.info("Falling back to heuristic judgment")
-            return self._judge_with_heuristics(backstory, evidence, novel_id)
         except Exception as e:
             logger.error(f"Error in LLM judgment: {e}")
-            logger.info("Falling back to heuristic judgment")
             return self._judge_with_heuristics(backstory, evidence, novel_id)
+        
     
     def _format_evidence_for_llm(self, evidence: List[Dict], max_chunks: int = 10) -> str:
         """
