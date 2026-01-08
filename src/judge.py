@@ -200,7 +200,7 @@ class ConsistencyJudge:
             return self._judge_with_heuristics(backstory, evidence, novel_id)
         
     
-    def _format_evidence_for_llm(self, evidence: List[Dict], max_chunks: int = 10) -> str:
+    def _format_evidence_for_llm(self, evidence: List[Dict], max_chunks: int = 15) -> str:
         """
         Format evidence chunks for LLM consumption.
         """
