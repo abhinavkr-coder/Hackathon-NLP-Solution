@@ -1,5 +1,5 @@
 # Core Pathway framework (required for Track A)
-pathway>=0.8.0
+pathway==0.post1
 
 # NLP and embedding models
 sentence-transformers>=2.2.2
