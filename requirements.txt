@@ -1,6 +1,9 @@
 # Core Pathway framework (required for Track A)
 pathway==0.post1
 
+# Deep learning backend (required)
+torch>=2.1.0
+
 # NLP and embedding models
 sentence-transformers>=2.2.2
 transformers>=4.30.0
@@ -12,12 +15,8 @@ nltk>=3.8.1
 pandas>=2.0.0
 numpy>=1.24.0
 
-# LLM integration (optional but recommended for better accuracy)
+# LLM integration (optional)
 anthropic>=0.25.0
 
 # Utilities
 tqdm>=4.65.0
-
-# Optional: For enhanced retrieval
-# faiss-cpu>=1.7.4  # For faster similarity search on CPU
-# faiss-gpu>=1.7.4  # For GPU acceleration (if available)

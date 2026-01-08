@@ -1,5 +1,10 @@
 # Narrative Consistency Evaluation System
 ## Kharagpur Data Science Hackathon 2026 - Track A Submission
+## Pathway Note
+Pathway is imported for Track-A compliance.
+On Windows, the PyPI distribution provides a stub package.
+The system runs fully locally using in-memory structures.
+Full Pathway runtime is supported on Linux.
 
 This project implements a sophisticated system for evaluating whether hypothetical character backstories are causally and logically consistent with long-form narrative texts (novels). The system uses established NLP techniques, semantic retrieval, and evidence-grounded reasoning to make these judgments.
 
@@ -74,7 +79,8 @@ pip install -r requirements.txt
 
 # Download required NLTK data (this happens automatically on first run)
 # But you can do it manually if preferred:
-python -c "import nltk; nltk.download('punkt')"
+python -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab')"
+
 ```
 
 If you plan to use LLM-based judgment (recommended for best accuracy), you'll need an Anthropic API key:
