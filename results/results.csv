@@ -1,2 +1,3 @@
-# results.csv
-
+story_id,prediction,rationale
+1,1,Backstory is plausible given available evidence
+2,1,Backstory is plausible given available evidence
