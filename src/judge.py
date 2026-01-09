@@ -12,6 +12,14 @@ Think of it like a detective reviewing evidence. Individual pieces might seem
 innocuous, but together they paint a picture that either supports or contradicts
 a hypothesis.
 """
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+API_KEY = os.getenv("GROQ_API_KEY")
+if not API_KEY:
+    raise RuntimeError("GROQ_API_KEY not found in .env")
 
 import logging
 import os
