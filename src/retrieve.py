@@ -80,24 +80,36 @@ class EvidenceRetriever:
         3. Aggregate and diversify results
         4. Rank by relevance
         """
+        if not backstory or not backstory.strip():
+            logger.warning("Empty backstory provided")
+            return []
+        
         logger.info(f"Retrieving evidence for novel {novel_id}")
         
-        # Decompose backstory into verifiable claims
-        claims = self.decompose_backstory(backstory)
-        logger.info(f"Extracted {len(claims)} claims from backstory")
-        
-        # Retrieve for each claim
-        all_chunks = self.vector_store.multi_query_search(
-            queries=claims,
-            novel_id=novel_id,
-            top_k_per_query=max(3, top_k // len(claims))
-        )
-        
-        # Take top-k overall
-        evidence = all_chunks[:top_k]
-        
-        logger.info(f"Retrieved {len(evidence)} evidence chunks")
-        return evidence
+        try:
+            # Decompose backstory into verifiable claims
+            claims = self.decompose_backstory(backstory)
+            logger.info(f"Extracted {len(claims)} claims from backstory")
+            
+            if not claims:
+                logger.warning("No claims could be extracted from backstory")
+                return []
+            
+            # Retrieve for each claim
+            all_chunks = self.vector_store.multi_query_search(
+                queries=claims,
+                novel_id=novel_id,
+                top_k_per_query=max(3, top_k // len(claims))
+            )
+            
+            # Take top-k overall
+            evidence = all_chunks[:top_k]
+            
+            logger.info(f"Retrieved {len(evidence)} evidence chunks")
+            return evidence
+        except Exception as e:
+            logger.error(f"Error retrieving evidence: {e}")
+            return []
     
     def retrieve_with_character_focus(
         self,

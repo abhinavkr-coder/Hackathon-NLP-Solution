@@ -16,6 +16,9 @@ from sentence_transformers import SentenceTransformer
 import numpy as np
 from typing import List, Dict
 import logging
+import pickle
+import os
+from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,7 +37,7 @@ class EmbeddingManager:
     processing backbone that could scale to handle multiple novels simultaneously.
     """
     
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(self, model_name: str = "all-MiniLM-L6-v2", cache_dir: str = "./cache"):
         """
         Initialize the embedding model.
         
@@ -50,17 +53,54 @@ class EmbeddingManager:
         logger.info(f"Loading embedding model: {model_name}")
         self.model = SentenceTransformer(model_name)
         self.embedding_dim = self.model.get_sentence_embedding_dimension()
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Model loaded. Embedding dimension: {self.embedding_dim}")
     
-    def create_embeddings(self, chunks: List[Dict]) -> List[Dict]:
+    def _get_cache_path(self, novel_id: str) -> Path:
+        """Get the cache file path for a novel's embeddings."""
+        return self.cache_dir / f"{novel_id}_embeddings.pkl"
+    
+    def load_cached_embeddings(self, novel_id: str) -> List[Dict] or None:
+        """Load cached embeddings if they exist."""
+        cache_path = self._get_cache_path(novel_id)
+        if cache_path.exists():
+            try:
+                with open(cache_path, 'rb') as f:
+                    chunks = pickle.load(f)
+                logger.info(f"Loaded {len(chunks)} cached chunks for {novel_id}")
+                return chunks
+            except Exception as e:
+                logger.warning(f"Failed to load cache for {novel_id}: {e}")
+        return None
+    
+    def save_embeddings_to_cache(self, chunks: List[Dict], novel_id: str):
+        """Save embeddings to cache for future use."""
+        cache_path = self._get_cache_path(novel_id)
+        try:
+            with open(cache_path, 'wb') as f:
+                pickle.dump(chunks, f)
+            logger.info(f"Saved {len(chunks)} embeddings to cache for {novel_id}")
+        except Exception as e:
+            logger.warning(f"Failed to save cache for {novel_id}: {e}")
+    
+    def create_embeddings(self, chunks: List[Dict], novel_id: str = None, use_cache: bool = True) -> List[Dict]:
         """
         Generate embeddings for all chunks in a novel.
         
         This is computationally expensive for 100k word novels, so we:
-        1. Batch the embedding generation for efficiency
-        2. Show progress to reassure the user it's working
-        3. Store embeddings with their source chunks for retrieval
+        1. Try to load from cache first
+        2. Batch the embedding generation for efficiency
+        3. Show progress to reassure the user it's working
+        4. Store embeddings with their source chunks for retrieval
+        5. Save to cache for future use
         """
+        # Try to load from cache
+        if use_cache and novel_id:
+            cached_chunks = self.load_cached_embeddings(novel_id)
+            if cached_chunks:
+                return cached_chunks
+        
         logger.info(f"Generating embeddings for {len(chunks)} chunks...")
         
         # Extract just the text for embedding
@@ -80,6 +120,11 @@ class EmbeddingManager:
             chunk['embedding'] = embeddings[i]
         
         logger.info(f"Embeddings generated successfully")
+        
+        # Save to cache
+        if novel_id:
+            self.save_embeddings_to_cache(chunks, novel_id)
+        
         return chunks
     
     def create_pathway_table(self, chunks: List[Dict]):

@@ -144,10 +144,18 @@ class NovelPreprocessor:
         
         This is the main entry point for processing a novel.
         """
-        with open(filepath, 'r', encoding='utf-8') as f:
-            text = f.read()
-        
-        return self.create_chunks(text, novel_id)
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                text = f.read()
+            
+            if not text.strip():
+                raise ValueError(f"Novel file {filepath} is empty")
+            
+            return self.create_chunks(text, novel_id)
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Novel file not found: {filepath}")
+        except Exception as e:
+            raise Exception(f"Error processing novel {filepath}: {str(e)}")
 
 
 def preprocess_backstory(backstory_text: str) -> str:

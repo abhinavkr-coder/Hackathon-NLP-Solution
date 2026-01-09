@@ -176,12 +176,24 @@ class ConsistencyJudge:
         LLM-based consistency checking using a supported Llama model (via Groq).
         """
         try:
+            # Check if API key is available
+            if not self.api_key:
+                logger.warning("No API key available for LLM. Falling back to heuristics.")
+                return self._judge_with_heuristics(backstory, evidence, novel_id)
+            
             # Prepare evidence context
             evidence_text = self._format_evidence_for_llm(evidence)
             prompt = self._create_judgment_prompt(backstory, evidence_text)
             
             # Import Groq client
-            from groq import Groq
+            try:
+                from groq import Groq
+            except ImportError:
+                logger.error("Groq package not installed. Installing...")
+                import subprocess
+                subprocess.check_call(['pip', 'install', 'groq'])
+                from groq import Groq
+            
             client = Groq(api_key=self.api_key)
             
             response = client.chat.completions.create(
@@ -203,6 +215,7 @@ class ConsistencyJudge:
             
         except Exception as e:
             logger.error(f"Error in LLM judgment: {e}")
+            logger.info("Falling back to rule-based heuristic judgment")
             return self._judge_with_heuristics(backstory, evidence, novel_id)
         
     

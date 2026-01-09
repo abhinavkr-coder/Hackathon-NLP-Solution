@@ -129,8 +129,12 @@ class NarrativeConsistencySystem:
                 )
                 logger.info(f"  Created {len(chunks)} chunks")
                 
-                # Step 2: Generate embeddings
-                chunks_with_embeddings = self.embedding_manager.create_embeddings(chunks)
+                # Step 2: Generate embeddings (with caching)
+                chunks_with_embeddings = self.embedding_manager.create_embeddings(
+                    chunks,
+                    novel_id=novel_id,
+                    use_cache=True
+                )
                 logger.info(f"  Generated embeddings")
                 
                 # Step 3: Add to vector store
