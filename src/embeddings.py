@@ -34,7 +34,7 @@ class EmbeddingManager:
     processing backbone that could scale to handle multiple novels simultaneously.
     """
     
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(self, model_name: str = "./fine_tuned_model"):
         """
         Initialize the embedding model.
         
@@ -172,7 +172,7 @@ class PathwayVectorStore:
         # Filter chunks by novel_id
         relevant_indices = [
             i for i, chunk in enumerate(self.chunks)
-            if chunk['novel_id'] == novel_id
+            if chunk['novel_id'].lower() == novel_id.lower()
         ]
         
         if not relevant_indices:

@@ -17,15 +17,16 @@ import os
 
 load_dotenv()
 
-API_KEY = os.getenv("GROQ_API_KEY")
+API_KEY = os.getenv("CEREBRAS_API_KEY")
 if not API_KEY:
-    raise RuntimeError("GROQ_API_KEY not found in .env")
+    raise RuntimeError("CEREBRAS_API_KEY not found in .env")
 
 import logging
 import os
 import re
 import time
 from typing import List, Dict, Tuple
+from openai import OpenAI
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -57,11 +58,11 @@ class ConsistencyJudge:
         self.api_key = api_key
         
         if use_llm and not api_key:
-            # Changed from ANTHROPIC_API_KEY to GROQ_API_KEY
-            self.api_key = os.getenv('GROQ_API_KEY')
+            # Changed from ANTHROPIC_API_KEY to CEREBRAS_API_KEY
+            self.api_key = os.getenv('CEREBRAS_API_KEY')
             if not self.api_key:
                 logger.warning(
-                    "No API key provided and GROQ_API_KEY not in environment. "
+                    "No API key provided and CEREBRAS_API_KEY not in environment. "
                     "Falling back to rule-based judgment."
                 )
                 self.use_llm = False
@@ -80,6 +81,8 @@ class ConsistencyJudge:
             rationale: Explanation of the decision
             confidence: Score between 0 and 1 indicating decision confidence
         """
+        if not evidence:
+            return 0, "No evidence found in the novel to support this backstory.", 0.0
         if self.use_llm:
             return self._judge_with_llm(backstory, evidence, novel_id)
         else:
@@ -175,23 +178,31 @@ class ConsistencyJudge:
         novel_id: str
     ) -> Tuple[int, str, float]:
         """
-        LLM-based consistency checking using a supported Llama model (via Groq).
+        LLM-based consistency checking using Cerebras (Llama 3.1 8B).
         """
         try:
             # Prepare evidence context
             evidence_text = self._format_evidence_for_llm(evidence)
             prompt = self._create_judgment_prompt(backstory, evidence_text)
             
-            # Import Groq client
-            from groq import Groq
-            client = Groq(api_key=self.api_key)
+            # Initialize Cerebras Client
+            # It uses the OpenAI SDK but points to Cerebras URL
+            api_key = os.getenv('CEREBRAS_API_KEY')
+            if not api_key:
+                logger.error("CEREBRAS_API_KEY not found. Please add it to .env")
+                return self._judge_with_heuristics(backstory, evidence, novel_id)
+
+            client = OpenAI(
+                api_key=api_key,
+                base_url="https://api.cerebras.ai/v1"
+            )
             
             response = client.chat.completions.create(
                 messages=[
                     {"role": "user", "content": prompt}
                 ],
-                # UPDATED: Use a supported model like llama-3.3-70b-versatile
-                model="llama-3.3-70b-versatile", 
+                # Use "llama3.1-8b" for best speed/free-tier limits
+                model="llama3.1-8b", 
                 temperature=0,
                 max_tokens=1000,
             )
@@ -206,7 +217,6 @@ class ConsistencyJudge:
         except Exception as e:
             logger.error(f"Error in LLM judgment: {e}")
             return self._judge_with_heuristics(backstory, evidence, novel_id)
-        
     
     def _format_evidence_for_llm(self, evidence: List[Dict], max_chunks: int = 15) -> str:
         """
@@ -311,7 +321,7 @@ Provide your analysis now:"""
             
             # Add a small delay if using LLM to respect rate limits
             if self.use_llm and i < total:
-                time.sleep(0.5)
+                time.sleep(0.2)
         
         logger.info("Batch judgment complete")
         return results

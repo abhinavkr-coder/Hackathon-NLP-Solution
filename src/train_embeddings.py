@@ -54,20 +54,22 @@ def train():
     logger.info("Preparing training examples...")
     for index, row in df.iterrows():
         try:
-            # Extract fields
-            # We use 'char' as the anchor and 'content' as the text to match
-            char_name = str(row['char']).strip()
+            # 1. We combine the Book Name and Character Name for a stronger anchor
+            # This helps the model distinguish characters if names overlap between books
+            anchor = f"{row['book_name']} - {row['char']}".strip()
+            
+            # 2. Use the 'content' column for the backstory text
             content = str(row['content']).strip()
+            
+            # 3. Use the 'label' column ('consistent' vs 'contradict')
             label_str = str(row['label']).strip().lower()
 
             # Skip incomplete rows
-            if not char_name or not content or content == 'nan':
+            if not row['char'] or not content or content == 'nan':
                 skipped_count += 1
                 continue
 
-            # Determine Score
-            # Label 1.0 = Consistent (The text belongs to this character concept)
-            # Label 0.0 = Contradict (The text does NOT belong to this character concept)
+            # Determine Score (1.0 for consistent, 0.0 for contradict)
             if 'consistent' in label_str:
                 score = 1.0
             elif 'contradict' in label_str:
@@ -76,18 +78,13 @@ def train():
                 skipped_count += 1
                 continue
 
-            # Create InputExample
-            # Input A: Character Name
-            # Input B: Backstory Claim
-            train_examples.append(InputExample(texts=[char_name, content], label=score))
+            # Create the training example
+            train_examples.append(InputExample(texts=[anchor, content], label=score))
 
         except KeyError as e:
             logger.error(f"Missing column in CSV: {e}")
-            logger.error("Expected columns: 'char', 'content', 'label'")
+            logger.error("Your CSV must have: 'book_name', 'char', 'content', and 'label'")
             return
-        except Exception as e:
-            skipped_count += 1
-            continue
 
     logger.info(f"Created {len(train_examples)} examples. Skipped {skipped_count} invalid rows.")
 

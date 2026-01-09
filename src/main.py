@@ -200,13 +200,13 @@ class NarrativeConsistencySystem:
                     backstory_clean,
                     character_name,
                     novel_id,
-                    top_k=15
+                    top_k=5
                 )
             else:
                 evidence = retriever.retrieve_for_backstory(
                     backstory_clean,
                     novel_id,
-                    top_k=15
+                    top_k=5
                 )
             
             logger.info(f"  Retrieved {len(evidence)} evidence chunks")
@@ -265,7 +265,7 @@ class NarrativeConsistencySystem:
             novel_id = row['book_name']           # was row['novel_id']
             backstory = row['content']            # was row['backstory']
             character_name = row.get('char', None) # was row.get('character_name')
-            
+
             logger.info(f"\nProcessing {idx + 1}/{len(test_df)}: {story_id}")
             
             result = self.process_single_case(

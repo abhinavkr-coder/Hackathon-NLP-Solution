@@ -16,7 +16,14 @@ pandas>=2.0.0
 numpy>=1.24.0
 
 # LLM integration (optional)
-anthropic>=0.25.0
+# anthropic>=0.25.0
 
 # Utilities
 tqdm>=4.65.0
+
+#datasets
+datasets
+
+transformers[torch]
+
+openai
