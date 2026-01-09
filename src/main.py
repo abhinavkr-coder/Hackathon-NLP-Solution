@@ -162,7 +162,8 @@ class NarrativeConsistencySystem:
         logger.info(f"Loaded {len(df)} test cases")
         
         # Validate required columns
-        required_cols = ['story_id', 'novel_id', 'backstory']
+        required_cols = ['id', 'book_name', 'content'] 
+    
         missing_cols = [col for col in required_cols if col not in df.columns]
         
         if missing_cols:
@@ -260,10 +261,10 @@ class NarrativeConsistencySystem:
         results = []
         
         for idx, row in test_df.iterrows():
-            story_id = row['story_id']
-            novel_id = row['novel_id']
-            backstory = row['backstory']
-            character_name = row.get('character_name', None)
+            story_id = row['id']                  # was row['story_id']
+            novel_id = row['book_name']           # was row['novel_id']
+            backstory = row['content']            # was row['backstory']
+            character_name = row.get('char', None) # was row.get('character_name')
             
             logger.info(f"\nProcessing {idx + 1}/{len(test_df)}: {story_id}")
             
