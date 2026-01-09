@@ -300,13 +300,14 @@ class NarrativeConsistencySystem:
         The output format matches the competition requirements:
         - story_id: Identifier
         - prediction: 1 (consistent) or 0 (inconsistent)
+        - confidence: Confidence score (0.0-1.0)
         - rationale: Explanation (optional but encouraged)
         """
         # Convert to DataFrame
         df = pd.DataFrame(results)
         
         # Ensure correct column order
-        output_df = df[['story_id', 'prediction', 'rationale']]
+        output_df = df[['story_id', 'prediction', 'confidence', 'rationale']]
         
         # Save to CSV
         output_file = self.results_dir / f"results{suffix}.csv"
