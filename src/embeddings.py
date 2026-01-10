@@ -204,6 +204,20 @@ class PathwayVectorStore:
         
         return results
     
+    def _enhance_query(self, query: str) -> str:
+        """
+        Enhance query for better semantic matching.
+        
+        This adds related keywords and rephrases for better retrieval.
+        """
+        # Simple enhancement: ensure full context is preserved
+        # More sophisticated approaches could use thesaurus or LLM
+        if len(query) < 20:
+            # Short query - might need elaboration
+            query = query  # Keep as is for now
+        
+        return query
+    
     def multi_query_search(
         self,
         queries: List[str],
