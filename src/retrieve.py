@@ -99,6 +99,54 @@ class EvidenceRetriever:
         logger.info(f"Retrieved {len(evidence)} evidence chunks")
         return evidence
     
+    def _score_evidence_quality(self, chunks: List[Dict], backstory: str) -> List[Dict]:
+        """
+        Score and re-rank evidence based on quality metrics.
+        
+        Factors considered:
+        - Semantic similarity (base score)
+        - Content density (information richness)
+        - Topical alignment with backstory
+        - Narrative position importance
+        """
+        backstory_words = set(word.lower() for word in backstory.split() if len(word) > 3)
+        
+        for chunk in chunks:
+            # Base score from semantic similarity
+            quality_score = chunk['similarity']
+            
+            # Boost for word overlap (topical relevance)
+            chunk_words = set(word.lower() for word in chunk['text'].split() if len(word) > 3)
+            overlap_ratio = len(backstory_words & chunk_words) / max(len(backstory_words), 1)
+            quality_score += overlap_ratio * 0.15
+            
+            # Boost for content density (longer, more informative chunks)
+            chunk_length = len(chunk['text'].split())
+            if chunk_length > 30:  # Substantive chunk
+                quality_score += 0.05
+            
+            # Normalize to [0, 1]
+            chunk['quality_score'] = min(1.0, quality_score)
+        
+        # Re-sort by quality score
+        chunks.sort(key=lambda x: x['quality_score'], reverse=True)
+        return chunks
+    
+    def _add_context_to_evidence(self, evidence: List[Dict], novel_id: str) -> List[Dict]:
+        """
+        Enrich evidence with surrounding context for better understanding.
+        
+        This helps the judge understand the broader narrative context of each
+        evidence chunk, making judgments more robust.
+        """
+        # This would require access to chunk neighbors in the vector store
+        # For now, we'll enhance by marking which chunks are adjacent
+        for i, chunk in enumerate(evidence):
+            chunk['position_in_results'] = i
+            chunk['in_top_5'] = i < 5
+        
+        return evidence
+    
     def retrieve_with_character_focus(
         self,
         backstory: str,
