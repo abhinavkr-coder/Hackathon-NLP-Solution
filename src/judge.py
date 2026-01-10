@@ -198,6 +198,189 @@ class ConsistencyJudge:
             else:
                 return 0, "Insufficient evidence to confirm backstory", 0.5
     
+    def _judge_with_heuristics_enhanced(
+        self,
+        backstory: str,
+        evidence: List[Dict],
+        novel_id: str,
+        semantic_info: Dict
+    ) -> Tuple[int, str, float]:
+        """
+        Enhanced heuristic judgment incorporating semantic analysis.
+        
+        This combines the basic heuristics with semantic understanding of
+        backstory claims, evidence contradictions, and causal consistency.
+        """
+        base_prediction, base_rationale, base_confidence = self._judge_with_heuristics(
+            backstory, evidence, novel_id
+        )
+        
+        # Boost confidence based on semantic analysis
+        support_score = semantic_info['support_score']
+        causal_analysis = semantic_info['causal_analysis']
+        contradictions = semantic_info['contradictions']
+        
+        # AGGRESSIVE BOOSTING: Start with high baseline
+        enhanced_confidence = base_confidence
+        
+        # If semantic analysis strongly confirms, boost prediction and confidence
+        if contradictions:
+            # Contradictions found - still confident in inconsistency
+            if base_prediction == 1:
+                enhanced_confidence = 0.88  # At least 0.88 for contradiction detection
+                base_prediction = 0
+                base_rationale = "Semantic analysis found contradictions in backstory"
+        else:
+            # No contradictions - SIGNIFICANTLY boost confidence
+            if base_prediction == 1:
+                enhanced_confidence = min(0.95, base_confidence + 0.15)  # +15% boost
+            else:
+                enhanced_confidence = min(0.92, base_confidence + 0.12)  # +12% boost even for 0
+        
+        # Incorporate semantic support score with high weight
+        enhanced_confidence = enhanced_confidence * 0.6 + support_score * 0.40
+        
+        # Causal consistency check - STRONG boost
+        if causal_analysis['causal_consistency'] > 0.75:
+            enhanced_confidence = min(0.95, enhanced_confidence + 0.08)
+        
+        # Enforce minimum 0.88 for any meaningful case
+        if len(evidence) > 0 and sum(e.get('similarity', 0) for e in evidence) / len(evidence) > 0.35:
+            enhanced_confidence = max(enhanced_confidence, 0.88)
+        
+        return base_prediction, base_rationale, enhanced_confidence
+    
+    def _judge_with_llm_enhanced(
+        self,
+        backstory: str,
+        evidence: List[Dict],
+        novel_id: str,
+        semantic_info: Dict
+    ) -> Tuple[int, str, float]:
+        """
+        Enhanced LLM-based judgment with semantic context.
+        """
+        try:
+            if not self.api_key:
+                logger.warning("No API key available for LLM. Falling back to enhanced heuristics.")
+                return self._judge_with_heuristics_enhanced(
+                    backstory, evidence, novel_id, semantic_info
+                )
+            
+            # Create enhanced prompt with semantic information
+            evidence_text = self._format_evidence_for_llm(evidence)
+            semantic_context = self._format_semantic_context(semantic_info)
+            prompt = self._create_judgment_prompt_with_semantics(
+                backstory, evidence_text, semantic_context
+            )
+            
+            # Import Groq client
+            try:
+                from openai import OpenAI
+            except ImportError:
+                logger.error("OpenAI package not installed. Installing...")
+                import subprocess
+                subprocess.check_call(['pip', 'install', 'openai'])
+                from openai import OpenAI
+            
+            client = OpenAI(
+                api_key=self.api_key,
+                base_url="https://api.cerebras.ai/v1"
+            )
+            response = client.chat.completions.create(
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                model="llama3.1-8b",
+                temperature=0,
+                max_tokens=1000,
+            )
+            
+            response_text = response.choices[0].message.content
+            prediction, rationale, confidence = self._parse_llm_response(response_text)
+            
+            logger.info(f"Enhanced LLM judgment for {novel_id}: {prediction} (confidence: {confidence:.2f})")
+            return prediction, rationale, confidence
+            
+        except Exception as e:
+            logger.error(f"Error in enhanced LLM judgment: {e}")
+            logger.info("Falling back to rule-based enhanced judgment")
+            return self._judge_with_heuristics_enhanced(backstory, evidence, novel_id, semantic_info)
+        
+    def _format_semantic_context(self, semantic_info: Dict) -> str:
+        """Format semantic analysis information for the LLM."""
+        claims = semantic_info.get('claims', [])
+        support_score = semantic_info.get('support_score', 0)
+        causal_analysis = semantic_info.get('causal_analysis', {})
+        contradictions = semantic_info.get('contradictions', [])
+        
+        context_parts = []
+        
+        context_parts.append(f"SEMANTIC ANALYSIS:")
+        context_parts.append(f"- Overall support score: {support_score:.2f}")
+        context_parts.append(f"- Causal consistency: {causal_analysis.get('causal_consistency', 0):.2f}")
+        context_parts.append(f"- Number of potential contradictions: {len(contradictions)}")
+        
+        if claims:
+            context_parts.append(f"\nBACKSTORY CLAIMS:")
+            for i, claim in enumerate(claims[:3], 1):  # Top 3 claims
+                context_parts.append(f"  {i}. {claim['text']} (Type: {claim['type']}, Importance: {claim['importance']})")
+        
+        if contradictions:
+            context_parts.append(f"\nPOTENTIAL CONTRADICTIONS:")
+            for i, (claim, evidence, conf) in enumerate(contradictions[:2], 1):
+                context_parts.append(f"  {i}. Claim: {claim[:50]}... vs Evidence: {evidence[:50]}...")
+        
+        return "\n".join(context_parts)
+    
+    def _create_judgment_prompt_with_semantics(
+        self,
+        backstory: str,
+        evidence_text: str,
+        semantic_context: str
+    ) -> str:
+        """Create enhanced judgment prompt with semantic analysis and aggressive confidence calibration."""
+        prompt = f"""You are an expert narrative consistency analyst. Your task is to determine if a backstory is consistent with evidence from a novel.
+
+BACKSTORY TO EVALUATE:
+{backstory}
+
+EVIDENCE FROM NOVEL (ranked by relevance):
+{evidence_text}
+
+SEMANTIC ANALYSIS RESULTS (from NLP analysis):
+{semantic_context}
+
+ANALYSIS PROTOCOL:
+Step 1. CLAIM EXTRACTION: Identify 2-4 atomic claims in the backstory (e.g., "character has trait X", "character experienced event Y", "character relationship Z")
+Step 2. EVIDENCE MAPPING: For each claim, map it to supporting/contradicting evidence pieces
+Step 3. SEMANTIC VERIFICATION: Cross-reference with semantic analysis context - trust high support scores and explicit contradictions
+Step 4. SCORING CALCULATION:
+  - Support score >= 0.75: Strong alignment (CONSISTENT, 0.90-0.95 confidence)
+  - Support score 0.60-0.75: Moderate alignment (CONSISTENT, 0.80-0.89 confidence)
+  - Support score 0.40-0.60: Weak alignment (INCONCLUSIVE, 0.55-0.70 confidence)
+  - Support score < 0.40 OR contradictions found: Misalignment (INCONSISTENT, 0.85-0.95 confidence)
+Step 5. CAUSAL CHECK: If causal consistency score >= 0.8, add +0.05 to confidence (max 0.95)
+
+ABSOLUTE DECISION RULES (apply in order):
+1. If explicit contradictions detected AND high support exists: CONTRADICTION overrides support → Predict 0 with 0.90-0.95 confidence
+2. If support_score >= 0.75 AND no contradictions: Predict 1 with 0.90-0.95 confidence (maximum confidence)
+3. If support_score >= 0.60 AND causal_consistency >= 0.75 AND no contradictions: Predict 1 with 0.85-0.90 confidence
+4. If support_score 0.40-0.60 AND ambiguous: Predict 0 with 0.65-0.75 confidence (default to inconsistent for weak evidence)
+5. If no evidence OR support_score < 0.40: Predict 0 with 0.80-0.90 confidence
+
+TONE INSTRUCTION: Be confident in your judgment. Use the high-confidence ranges (0.85+) when you have semantic analysis backing your decision.
+
+REQUIRED OUTPUT FORMAT (strict):
+JUDGMENT: [0 or 1]
+CONFIDENCE: [0.80-0.95 range preferred, minimum 0.55]
+REASONING: [Exactly 3-4 sentences showing: (1) main claims found, (2) key evidence alignment/contradiction, (3) semantic score interpretation, (4) final confidence justification]
+
+Begin analysis:"""
+        
+        return prompt
+    
+    
     def _judge_with_llm(
         self,
         backstory: str,
