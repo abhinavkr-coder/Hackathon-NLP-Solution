@@ -1,0 +1,11 @@
+{
+  "method": "heuristic",
+  "total": 2,
+  "count_1": 1,
+  "count_0": 1,
+  "avg_confidence": 0.925,
+  "avg_confidence_1": 0.97,
+  "best_confidence_1": 0.97,
+  "avg_confidence_0": 0.88,
+  "best_confidence_0": 0.88
+}
