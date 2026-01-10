@@ -64,6 +64,19 @@ class NarrativeConsistencySystem:
     def load_test_data(self) -> pd.DataFrame:
         test_file = self.data_dir / "test.csv"
         df = pd.read_csv(test_file)
+<<<<<<< HEAD
+=======
+        logger.info(f"Loaded {len(df)} test cases")
+        
+        # Validate required columns
+        required_cols = ['id', 'book_name', 'content'] 
+    
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        
+        if missing_cols:
+            raise ValueError(f"Test file missing required columns: {missing_cols}")
+        
+>>>>>>> 4237824b503bad8c15aef226a8e4823065d725a9
         return df
 
     def process_single_case(
@@ -79,8 +92,30 @@ class NarrativeConsistencySystem:
         try:
             backstory_clean = preprocess_backstory(backstory)
             retriever = EvidenceRetriever(self.vector_store)
+<<<<<<< HEAD
 
             temporal_evidence = retriever.retrieve_temporal_evidence(
+=======
+            
+            if character_name:
+                evidence = retriever.retrieve_with_character_focus(
+                    backstory_clean,
+                    character_name,
+                    novel_id,
+                    top_k=5
+                )
+            else:
+                evidence = retriever.retrieve_for_backstory(
+                    backstory_clean,
+                    novel_id,
+                    top_k=5
+                )
+            
+            logger.info(f"  Retrieved {len(evidence)} evidence chunks")
+            
+            # Step 3: Judge consistency
+            prediction, rationale, confidence = self.judge.judge_consistency(
+>>>>>>> 4237824b503bad8c15aef226a8e4823065d725a9
                 backstory_clean,
                 novel_id,
                 top_k=15
@@ -133,8 +168,20 @@ class NarrativeConsistencySystem:
     def run_evaluation(self) -> pd.DataFrame:
         test_df = self.load_test_data()
         results = []
+<<<<<<< HEAD
 
         for _, row in test_df.iterrows():
+=======
+        
+        for idx, row in test_df.iterrows():
+            story_id = row['id']                  # was row['story_id']
+            novel_id = row['book_name']           # was row['novel_id']
+            backstory = row['content']            # was row['backstory']
+            character_name = row.get('char', None) # was row.get('character_name')
+
+            logger.info(f"\nProcessing {idx + 1}/{len(test_df)}: {story_id}")
+            
+>>>>>>> 4237824b503bad8c15aef226a8e4823065d725a9
             result = self.process_single_case(
                 row["story_id"],
                 row["novel_id"],

@@ -1,14 +1,32 @@
+"""
+judge.py - Consistency Judgment Engine
+
+This is where we make the final decision: is the backstory consistent with the novel?
+
+The challenge here is subtle. We're not checking for word-for-word matches or
+simple contradictions. We're asking a deeper question: given the constraints
+established throughout the narrative, could this backstory plausibly lead to
+the events we observe?
+
+Think of it like a detective reviewing evidence. Individual pieces might seem
+innocuous, but together they paint a picture that either supports or contradicts
+a hypothesis.
+"""
 from dotenv import load_dotenv
 import os
 
 load_dotenv()
 
-API_KEY = os.getenv("GROQ_API_KEY")
+API_KEY = os.getenv("CEREBRAS_API_KEY")
+if not API_KEY:
+    raise RuntimeError("CEREBRAS_API_KEY not found in .env")
+
 import logging
 import os
 import re
 import time
 from typing import List, Dict, Tuple
+from openai import OpenAI
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,10 +38,12 @@ class ConsistencyJudge:
         self.api_key = api_key
 
         if use_llm and not api_key:
-            self.api_key = os.getenv("GROQ_API_KEY")
+            # Changed from ANTHROPIC_API_KEY to CEREBRAS_API_KEY
+            self.api_key = os.getenv('CEREBRAS_API_KEY')
             if not self.api_key:
                 logger.warning(
-                    "No GROQ_API_KEY found. Falling back to heuristic mode."
+                    "No API key provided and CEREBRAS_API_KEY not in environment. "
+                    "Falling back to rule-based judgment."
                 )
                 self.use_llm = False
 
@@ -37,6 +57,16 @@ class ConsistencyJudge:
         evidence: List[Dict],
         novel_id: str
     ) -> Tuple[int, str, float]:
+        """
+        Main entry point for consistency judgment.
+        
+        Returns:
+            prediction: 1 (consistent) or 0 (inconsistent)
+            rationale: Explanation of the decision
+            confidence: Score between 0 and 1 indicating decision confidence
+        """
+        if not evidence:
+            return 0, "No evidence found in the novel to support this backstory.", 0.0
         if self.use_llm:
             return self._judge_with_llm(backstory, evidence, novel_id)
         return self._judge_with_heuristics(backstory, evidence, novel_id)
@@ -160,18 +190,32 @@ class ConsistencyJudge:
         evidence: List[Dict],
         novel_id: str
     ) -> Tuple[int, str, float]:
+        """
+        LLM-based consistency checking using Cerebras (Llama 3.1 8B).
+        """
         try:
-            from groq import Groq
+            # Prepare evidence context
+            evidence_text = self._format_evidence_for_llm(evidence)
+            prompt = self._create_judgment_prompt(backstory, evidence_text)
+            
+            # Initialize Cerebras Client
+            # It uses the OpenAI SDK but points to Cerebras URL
+            api_key = os.getenv('CEREBRAS_API_KEY')
+            if not api_key:
+                logger.error("CEREBRAS_API_KEY not found. Please add it to .env")
+                return self._judge_with_heuristics(backstory, evidence, novel_id)
 
-            prompt = self._create_judgment_prompt(
-                backstory,
-                self._format_evidence_for_llm(evidence)
+            client = OpenAI(
+                api_key=api_key,
+                base_url="https://api.cerebras.ai/v1"
             )
-
-            client = Groq(api_key=self.api_key)
+            
             response = client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                # Use "llama3.1-8b" for best speed/free-tier limits
+                model="llama3.1-8b", 
                 temperature=0,
                 max_tokens=800
             )
@@ -183,43 +227,142 @@ class ConsistencyJudge:
         except Exception as e:
             logger.error(f"LLM failure: {e}")
             return self._judge_with_heuristics(backstory, evidence, novel_id)
-
-    # ---------------------------------------------------------
-    # LLM HELPERS
-    # ---------------------------------------------------------
-
-    def _format_evidence_for_llm(self, evidence: List[Dict]) -> str:
-        return "\n\n".join(
-            f"[{i+1}] ({c['similarity']:.2f}) {c['text']}"
-            for i, c in enumerate(evidence[:15])
-        )
-
-    def _create_judgment_prompt(self, backstory: str, evidence: str) -> str:
-        return f"""
-BACKSTORY:
+    
+    def _format_evidence_for_llm(self, evidence: List[Dict], max_chunks: int = 15) -> str:
+        """
+        Format evidence chunks for LLM consumption.
+        """
+        formatted_pieces = []
+        
+        for i, chunk in enumerate(evidence[:max_chunks], 1):
+            formatted_pieces.append(
+                f"[Evidence {i}] (Relevance: {chunk['similarity']:.2f})\n"
+                f"{chunk['text']}\n"
+            )
+        
+        return "\n".join(formatted_pieces)
+    
+    def _create_judgment_prompt(self, backstory: str, evidence_text: str) -> str:
+        """
+        Create prompt for Llama 3 judgment.
+        """
+        prompt = f"""You are analyzing narrative consistency in a novel.
+        
+BACKSTORY TO EVALUATE:
 {backstory}
 
 EVIDENCE:
 {evidence}
 
-Decide if the backstory is CONSISTENT (1) or INCONSISTENT (0).
-Focus on causal and temporal consistency.
+TASK:
+Determine if this backstory is CONSISTENT (1) or INCONSISTENT (0) with the novel based on the evidence.
 
-Output format:
-JUDGMENT: <0 or 1>
-CONFIDENCE: <0.0–1.0>
-REASONING: <brief>
-"""
+IMPORTANT GUIDELINES:
+1. Focus on CAUSAL CONSISTENCY.
+2. If the evidence directly contradicts the backstory (e.g. backstory says "rich", novel says "poverty"), mark as 0.
+3. If the backstory is plausible and not contradicted, mark as 1.
 
-    def _parse_llm_response(self, text: str) -> Tuple[int, str, float]:
-        pred = 1
-        if "JUDGMENT:" in text:
-            pred = int(re.search(r"JUDGMENT:\s*(\d)", text).group(1))
+REQUIRED OUTPUT FORMAT:
+JUDGMENT: [0 or 1]
+CONFIDENCE: [0.0-1.0]
+REASONING: [2-3 sentence explanation of your decision]
 
-        conf = 0.7
-        m = re.search(r"CONFIDENCE:\s*(0?\.\d+|1\.0)", text)
-        if m:
-            conf = float(m.group(1))
+Provide your analysis now:"""
+        
+        return prompt
+    
+    def _parse_llm_response(self, response_text: str) -> Tuple[int, str, float]:
+        """
+        Parse structured output from LLM.
+        """
+        # Extract judgment
+        judgment_match = re.search(r'JUDGMENT:\s*(\d)', response_text)
+        if judgment_match:
+            prediction = int(judgment_match.group(1))
+        else:
+            # Fallback: look for keywords
+            if 'inconsistent' in response_text.lower():
+                prediction = 0
+            else:
+                prediction = 1
+        
+        # Extract confidence
+        confidence_match = re.search(r'CONFIDENCE:\s*(0?\.\d+|1\.0)', response_text)
+        if confidence_match:
+            confidence = float(confidence_match.group(1))
+        else:
+            confidence = 0.7  # Default moderate confidence
+        
+        # Extract reasoning
+        reasoning_match = re.search(r'REASONING:\s*(.+?)(?:\n\n|$)', response_text, re.DOTALL)
+        if reasoning_match:
+            rationale = reasoning_match.group(1).strip()
+        else:
+            # Fallback: use the whole response
+            rationale = response_text[:200] + "..." if len(response_text) > 200 else response_text
+        
+        return prediction, rationale, confidence
+    
+    def batch_judge(
+        self,
+        backstory_evidence_pairs: List[Tuple[str, List[Dict], str]]
+    ) -> List[Dict]:
+        """
+        Process multiple backstory-evidence pairs efficiently.
+        """
+        results = []
+        total = len(backstory_evidence_pairs)
+        
+        logger.info(f"Processing {total} consistency judgments...")
+        
+        for i, (backstory, evidence, novel_id) in enumerate(backstory_evidence_pairs, 1):
+            logger.info(f"Judging {i}/{total}: {novel_id}")
+            
+            prediction, rationale, confidence = self.judge_consistency(
+                backstory, evidence, novel_id
+            )
+            
+            results.append({
+                'novel_id': novel_id,
+                'prediction': prediction,
+                'rationale': rationale,
+                'confidence': confidence
+            })
+            
+            # Add a small delay if using LLM to respect rate limits
+            if self.use_llm and i < total:
+                time.sleep(0.2)
+        
+        logger.info("Batch judgment complete")
+        return results
 
-        reason = text.strip()[:200]
-        return pred, reason, conf
+
+if __name__ == "__main__":
+    # Test the judge with mock evidence
+    judge = ConsistencyJudge(use_llm=False)
+    
+    # TEST CASE 1: Contradiction (Wealth vs Poverty)
+    print("\nTest Case 1: Contradiction")
+    test_backstory_1 = "John was born wealthy and inherited a private hospital."
+    test_evidence_1 = [
+        {
+            'text': "John remembered the cold winters in his childhood home, where heating was a luxury they couldn't afford due to their extreme poverty.",
+            'similarity': 0.85
+        }
+    ]
+    pred1, rat1, conf1 = judge.judge_consistency(test_backstory_1, test_evidence_1, "test1")
+    print(f"Prediction: {pred1} (Expected: 0)")
+    print(f"Rationale: {rat1}")
+
+    # TEST CASE 2: Consistent
+    print("\nTest Case 2: Consistent")
+    test_backstory_2 = "John grew up in poverty in London."
+    test_evidence_2 = [
+        {
+            'text': "John remembered the cold winters in his childhood home in London, where heating was a luxury they couldn't afford.",
+            'similarity': 0.85
+        }
+    ]
+    pred2, rat2, conf2 = judge.judge_consistency(test_backstory_2, test_evidence_2, "test2")
+    print(f"Prediction: {pred2} (Expected: 1)")
+    print(f"Rationale: {rat2}")
