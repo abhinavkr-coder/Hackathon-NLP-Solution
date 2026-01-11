@@ -24,6 +24,7 @@ class SemanticAnalyzer:
     2. Character motivation extraction
     3. Narrative constraint identification
     4. Semantic contradiction analysis
+    5. Entity and Fact Verification (Anti-Hallucination)
     """
     
     def __init__(self):
@@ -48,15 +49,27 @@ class SemanticAnalyzer:
             ('trusted', 'betrayed'), ('loyal', 'traitor'), ('faithful', 'disloyal'),
             ('helped', 'harmed'), ('aid', 'harm'), ('assistance', 'sabotage')
         ]
+
+        # Common stop words to filter out from entity extraction
+        self.stop_words = {
+            'The', 'A', 'An', 'He', 'She', 'It', 'They', 'We', 'I', 'You',
+            'This', 'That', 'These', 'Those', 'In', 'On', 'At', 'To', 'For',
+            'Of', 'By', 'With', 'From', 'After', 'Before', 'While', 'When',
+            'Where', 'Who', 'What', 'Why', 'How', 'Then', 'So', 'But', 'And',
+            'Or', 'Nor', 'Yet', 'Once', 'Since', 'Although', 'Though'
+        }
     
     def analyze_backstory_claims(self, backstory: str) -> List[Dict]:
         """
         Extract and analyze individual claims from backstory.
         
         Returns list of dicts with:
-        - claim: The extracted claim
+        - text: The extracted claim
         - type: 'character_trait', 'event', 'motivation', 'relationship'
         - importance: 'high', 'medium', 'low'
+        - entities: List of named entities
+        - dates: List of extracted dates
+        - actions: List of action verbs
         """
         claims = []
         
@@ -73,11 +86,67 @@ class SemanticAnalyzer:
                 'type': self._classify_claim(sentence),
                 'importance': self._assess_importance(sentence),
                 'entities': self._extract_entities(sentence),
+                'dates': self._extract_dates(sentence),
                 'actions': self._extract_actions(sentence)
             }
             claims.append(claim_dict)
         
         return claims
+    
+    def calculate_detail_overlap(self, backstory: str, evidence: List[Dict]) -> Dict:
+        """
+        Calculate how many specific details (Entities, Dates) from the backstory 
+        actually appear in the evidence. This is crucial for detecting hallucinations.
+        
+        Returns dict with:
+        - overlap_score: Float 0-1 representing detail overlap
+        - found_count: Number of details found in evidence
+        - total_details: Total number of details in backstory
+        - missing_details: List of details not found in evidence
+        """
+        bs_entities = set(self._extract_entities(backstory))
+        bs_dates = set(self._extract_dates(backstory))
+        
+        if not bs_entities and not bs_dates:
+            return {
+                'overlap_score': 0.5,
+                'found_count': 0,
+                'total_details': 0,
+                'missing_details': []
+            }  # No details to verify
+            
+        combined_evidence = " ".join([e['text'].lower() for e in evidence])
+        
+        found_entities = 0
+        missing_details = []
+        
+        # Check Entities
+        for entity in bs_entities:
+            # Simple check: is the entity string in the evidence?
+            if entity.lower() in combined_evidence:
+                found_entities += 1
+            else:
+                missing_details.append(entity)
+                
+        # Check Dates
+        found_dates = 0
+        for date in bs_dates:
+            if date in combined_evidence:
+                found_dates += 1
+            else:
+                missing_details.append(date)
+        
+        total_details = len(bs_entities) + len(bs_dates)
+        found_total = found_entities + found_dates
+        
+        overlap_score = found_total / total_details if total_details > 0 else 0
+        
+        return {
+            'overlap_score': overlap_score,
+            'found_count': found_total,
+            'total_details': total_details,
+            'missing_details': missing_details
+        }
     
     def _classify_claim(self, sentence: str) -> str:
         """Classify the type of claim in a sentence."""
@@ -103,8 +172,11 @@ class SemanticAnalyzer:
         """Assess the importance of a claim."""
         words = sentence.lower().split()
         
-        # High importance keywords
-        high_importance = {'murdered', 'killed', 'died', 'born', 'father', 'mother', 'wealthy', 'poor'}
+        # High importance keywords (expanded from version 2)
+        high_importance = {
+            'murdered', 'killed', 'died', 'born', 'father', 'mother', 
+            'wealthy', 'poor', 'prison', 'escape'
+        }
         if any(word in high_importance for word in words):
             return 'high'
         
@@ -115,25 +187,33 @@ class SemanticAnalyzer:
         return 'low'
     
     def _extract_entities(self, sentence: str) -> List[str]:
-        """Extract key entities (names, places, concepts)."""
-        # Very simple - just capitalized words
+        """
+        Extract key entities (names, places, capitalized concepts).
+        Filters out common stop words for better precision.
+        """
         entities = []
         words = sentence.split()
         for word in words:
-            if word and word[0].isupper() and len(word) > 2:
-                # Remove punctuation
-                clean_word = re.sub(r'[^\w]', '', word)
-                if clean_word:
-                    entities.append(clean_word.lower())
+            # Check for capitalization and length, and ensure it's not a stop word
+            clean_word = re.sub(r'[^\w]', '', word)
+            if (word and word[0].isupper() and 
+                len(word) > 2 and 
+                clean_word not in self.stop_words):
+                entities.append(clean_word)
         return entities
+
+    def _extract_dates(self, sentence: str) -> List[str]:
+        """Extract years (e.g., 1852, 1796) from 17th-19th centuries."""
+        return re.findall(r'\b(1[789]\d{2})\b', sentence)
     
     def _extract_actions(self, sentence: str) -> List[str]:
         """Extract action verbs from the sentence."""
-        # Simple pattern: words that are typically verbs
+        # Expanded action words combining both versions
         action_words = {
             'became', 'grew', 'lived', 'died', 'was', 'had', 'made', 'helped',
             'protected', 'raised', 'found', 'discovered', 'traveled', 'moved',
-            'worked', 'studied', 'learned', 'taught', 'created', 'built'
+            'worked', 'studied', 'learned', 'taught', 'created', 'built',
+            'escaped', 'killed', 'murdered', 'saved', 'rescued'
         }
         
         sentence_lower = sentence.lower()
@@ -163,14 +243,15 @@ class SemanticAnalyzer:
                 chunk_text = chunk['text'].lower()
                 similarity = chunk.get('similarity', 0)
                 
-                # Only check high-similarity chunks
-                if similarity < 0.65:
+                # Adjusted threshold from version 2 (0.60 vs 0.65)
+                if similarity < 0.60:
                     continue
                 
                 # Check for antonym pairs
                 for antonym1, antonym2 in self.antonym_pairs:
                     if antonym1 in claim_text and antonym2 in chunk_text:
-                        contradiction_score = min(0.95, similarity + 0.10)
+                        # Higher boost from version 2 (0.15 vs 0.10)
+                        contradiction_score = min(0.95, similarity + 0.15)
                         contradictions.append((
                             claim['text'],
                             chunk['text'][:100],
@@ -207,15 +288,15 @@ class SemanticAnalyzer:
                 chunk_text = chunk['text'].lower()
                 similarity = chunk.get('similarity', 0)
                 
-                # Count entity overlap
+                # Count entity overlap (improved from version 2)
                 chunk_words = set(word.lower() for word in chunk_text.split())
-                entity_overlap = len(claim_entities & chunk_words)
+                entity_overlap = len({e.lower() for e in claim_entities} & chunk_words)
                 
                 # Count action overlap
                 action_overlap = len(claim_actions & set(chunk_text.split()))
                 
-                # Combine factors
-                entity_boost = entity_overlap * 0.1
+                # Combine factors - using higher entity boost from version 2
+                entity_boost = entity_overlap * 0.15
                 action_boost = action_overlap * 0.15
                 
                 support_score = min(1.0, similarity + entity_boost + action_boost)
@@ -237,7 +318,8 @@ class SemanticAnalyzer:
         Returns dict with:
         - has_causal_chain: Whether evidence shows causal relationships
         - causal_consistency: Float 0-1 indicating consistency
-        - causal_gaps: List of missing causal connections
+        - backstory_causal_count: Number of causal indicators in backstory
+        - evidence_causal_count: Number of causal indicators in evidence
         """
         evidence_text = " ".join([chunk['text'] for chunk in evidence_chunks])
         
@@ -253,15 +335,17 @@ class SemanticAnalyzer:
             if indicator in evidence_text.lower()
         )
         
-        # Assess causal consistency
+        # Assess causal consistency (improved logic from version 2)
         has_causal_chain = evidence_causals > 0
+        causal_consistency = 0.8  # Default baseline
         
         if backstory_causals > 0:
-            # If backstory claims causal relationships, evidence should show them
-            causal_consistency = min(1.0, evidence_causals / (backstory_causals + 1))
-        else:
-            # If backstory has no explicit causality, high match is good
-            causal_consistency = 0.7 if evidence_causals > 0 else 0.8
+            # If backstory relies on causality, we need evidence of it
+            if evidence_causals == 0:
+                causal_consistency = 0.4
+            else:
+                # More nuanced scoring from version 2
+                causal_consistency = min(1.0, 0.5 + (evidence_causals / (backstory_causals + 1)) * 0.5)
         
         return {
             'has_causal_chain': has_causal_chain,
@@ -274,12 +358,20 @@ class SemanticAnalyzer:
 def enhance_evidence_with_semantic_analysis(
     evidence: List[Dict],
     backstory: str
-) -> List[Dict]:
+) -> Tuple[List[Dict], Dict]:
     """
     Enhance evidence chunks with semantic analysis scores.
     
     This function augments the evidence list with additional semantic scores
     that can be used by the judge for better decision making.
+    
+    Returns:
+        Tuple of (enhanced_evidence, analysis_dict) where analysis_dict contains:
+        - claims: Extracted backstory claims
+        - support_score: Overall support score
+        - contradictions: List of contradictions found
+        - causal_analysis: Causal consistency analysis
+        - detail_check: Detail overlap analysis (anti-hallucination)
     """
     analyzer = SemanticAnalyzer()
     
@@ -295,6 +387,9 @@ def enhance_evidence_with_semantic_analysis(
     # Analyze causal consistency
     causal_analysis = analyzer.analyze_causal_consistency(backstory, evidence)
     
+    # Check for specific detail overlap (Hallucination check - from version 2)
+    detail_check = analyzer.calculate_detail_overlap(backstory, evidence)
+    
     # Add scores to evidence
     for chunk in evidence:
         chunk['semantic_support_score'] = support_score
@@ -305,7 +400,8 @@ def enhance_evidence_with_semantic_analysis(
         'claims': claims,
         'support_score': support_score,
         'contradictions': contradictions,
-        'causal_analysis': causal_analysis
+        'causal_analysis': causal_analysis,
+        'detail_check': detail_check  # Pass this to the judge
     }
 
 
@@ -313,10 +409,12 @@ if __name__ == "__main__":
     # Test semantic analyzer
     analyzer = SemanticAnalyzer()
     
-    test_backstory = "John grew up poor in London but became a doctor to help his community."
+    test_backstory = "John grew up poor in London in 1852 but became a doctor to help his community."
     claims = analyzer.analyze_backstory_claims(test_backstory)
     
     print("Extracted claims:")
     for claim in claims:
         print(f"  - {claim['text']}")
         print(f"    Type: {claim['type']}, Importance: {claim['importance']}")
+        print(f"    Entities: {claim['entities']}, Dates: {claim['dates']}")
+        print(f"    Actions: {claim['actions']}")
