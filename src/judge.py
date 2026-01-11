@@ -83,8 +83,40 @@ class ConsistencyJudge:
         """
         if not evidence:
             return 0, "No evidence found in the novel to support this backstory.", 0.0
+
+        # Precompute combined evidence text and average similarity
+        combined_evidence_text = " ".join([chunk.get('text', '') for chunk in evidence]).lower()
+        avg_similarity = sum(chunk.get('similarity', 0.0) for chunk in evidence) / max(len(evidence), 1)
+
+        # Hard-fail on missing critical objects/nouns: if the backstory mentions
+        # a critical noun (diary, barrel, spy, manuscript, letter, journal, etc.)
+        # and NONE of the retrieved evidence contains that noun, this is a
+        # strong hallucination signal — prefer a safe INCONSISTENT judgement.
+        critical_nouns = ['diary', 'barrel', 'spy', 'manuscript', 'letter', 'journal']
+        b_lower = backstory.lower()
+        for noun in critical_nouns:
+            if noun in b_lower and noun not in combined_evidence_text:
+                rationale = (
+                    f"Hallucination risk=1.00; critical term '{noun}' appears in backstory "
+                    "but is absent from retrieved evidence."
+                )
+                return 0, rationale, 0.95
+
+        # Proceed with chosen judgment method, but enforce a post-check for
+        # low semantic support so LLMs don't incorrectly overrule missing evidence.
         if self.use_llm:
-            return self._judge_with_llm(backstory, evidence, novel_id)
+            pred, rationale, confidence = self._judge_with_llm(backstory, evidence, novel_id)
+
+            # If LLM says consistent but average semantic support is weak,
+            # override to INCONSISTENT to avoid hallucinated positives.
+            if pred == 1 and avg_similarity < 0.50:
+                override_rationale = (
+                    f"Overridden to INCONSISTENT due to low semantic support "
+                    f"(avg_similarity={avg_similarity:.2f}). Original rationale: {rationale}"
+                )
+                return 0, override_rationale, max(confidence, 0.6)
+
+            return pred, rationale, confidence
         else:
             return self._judge_with_heuristics(backstory, evidence, novel_id)
 
@@ -150,26 +182,22 @@ class ConsistencyJudge:
                 if len(common_words) > 2 and any(word in text_lower for word in negation_words):
                     contradiction_count += 1
         
-        # Decision logic
-        if avg_similarity < 0.45:
-            # Very low similarity - backstory might be unrelated to novel
+        # Decision logic (stricter thresholds to reduce false positives)
+        if avg_similarity < 0.50:
+            # Very low similarity - backstory is unsupported
             return 0, "Backstory claims are not supported by the narrative", 0.6
-        
+
         elif contradiction_count >= 1:
             # High-similarity passages with negation
             return 0, "Evidence contains direct negations of backstory claims", 0.7
-        
-        elif avg_similarity > 0.65 and contradiction_count == 0:
+
+        elif avg_similarity >= 0.65 and contradiction_count == 0:
             # High similarity, no clear contradictions
             return 1, "Backstory is well-supported by narrative evidence", 0.8
-        
+
         else:
-            # Ambiguous case - Default to UNCERTAIN/INCONSISTENT if not strongly supported
-            # (Changed from returning 1 to 0 to avoid false positives)
-            if avg_similarity > 0.6:
-                return 1, "Backstory is plausible given available evidence", 0.55
-            else:
-                return 0, "Insufficient evidence to confirm backstory", 0.5
+            # Ambiguous / borderline cases: default to INCONSISTENT to avoid hallucination
+            return 0, "Insufficient evidence to confirm backstory (borderline support)", 0.5
     
     def _judge_with_llm(
         self,
